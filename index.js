@@ -1533,13 +1533,6 @@ app.post('/api/hr/employees/import', async (req, res) => {
         profTax: normalizeDeductionRule(employee.profTax ?? employee['PROF.TAX']),
       }
       const split = splitBasicPackage(basicPackage)
-      if (split.basicSalary < 15075) {
-        errors.push(
-          `${empId || employeeName || sno}: Derived Basic Salary is ₹${split.basicSalary.toFixed(2)} from uploaded BASIC ₹${split.totalBasic.toFixed(2)}. It cannot be less than ₹15,075.`,
-        )
-        continue
-      }
-
       const employeeResult = await client.query(
         `INSERT INTO tbl_employees (
           sno, emp_id, employee_name, father_name, department, is_active,
@@ -2094,7 +2087,6 @@ ensureSchema()
     console.error('schema initialization error', err)
     process.exit(1)
   })
-
 
 
 
