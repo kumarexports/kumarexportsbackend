@@ -1132,7 +1132,11 @@ app.get('/api/government-salaries', async (req, res) => {
                   THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * NULLIF(regexp_replace(COALESCE(e.pfvol_value, ''), '[^0-9.-]', '', 'g'), '')::numeric / 100, 2)
                 ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.pfvol_value, ''), '[^0-9.-]', '', 'g'), '')::numeric, 0)
               END AS pfvol,
-              0 AS esi,
+              CASE
+                WHEN LOWER(TRIM(COALESCE(e.esi_value, ''))) IN ('yes', 'y', 'true', '1')
+                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * 0.0075, 2)
+                ELSE 0
+              END AS esi,
               CASE
                 WHEN NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), '')::numeric < 100
                   THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), '')::numeric / 100, 2)
@@ -2087,7 +2091,6 @@ ensureSchema()
     console.error('schema initialization error', err)
     process.exit(1)
   })
-
 
 
 
