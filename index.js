@@ -74,11 +74,46 @@ const ensureSchema = async () => {
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS basic_package NUMERIC(12,2) NOT NULL DEFAULT 0`)
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS company VARCHAR(150)`)
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS pf_value VARCHAR(40)`)
+  await db.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'tbl_employees'
+          AND column_name = 'pf_value'
+          AND data_type <> 'character varying'
+      ) THEN
+        ALTER TABLE tbl_employees
+          ALTER COLUMN pf_value TYPE VARCHAR(40)
+          USING pf_value::text;
+      END IF;
+    END $$;
+  `)
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS pfvol_value VARCHAR(40)`)
+  await db.query(`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_name = 'tbl_employees'
+          AND column_name = 'pfvol_value'
+          AND data_type <> 'numeric'
+      ) THEN
+        ALTER TABLE tbl_employees
+          ALTER COLUMN pfvol_value TYPE NUMERIC(12,2)
+          USING NULLIF(regexp_replace(pfvol_value, '[^0-9.-]', '', 'g'), '')::numeric;
+      END IF;
+    END $$;
+  `)
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS esi_value VARCHAR(40)`)
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS tds_value VARCHAR(40)`)
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS prof_tax_value VARCHAR(40)`)
   await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD COLUMN IF NOT EXISTS import_data JSONB`)
+  await db.query(`ALTER TABLE IF EXISTS tbl_employees DROP CONSTRAINT IF EXISTS tbl_employees_emp_id_key`)
+  await db.query(`ALTER TABLE IF EXISTS tbl_employees DROP CONSTRAINT IF EXISTS uq_tbl_employees_company_emp_id`)
+  await db.query(`ALTER TABLE IF EXISTS tbl_employees ADD CONSTRAINT uq_tbl_employees_company_emp_id UNIQUE (company, emp_id)`)
 
   await db.query(
     `CREATE TABLE IF NOT EXISTS tbl_salary_increment_history (
@@ -370,7 +405,10 @@ const resolveMasterDeduction = (rawValue, basicSalary, percentageBase = basicSal
   return roundMoney(numeric)
 }
 
-const resolvePfDeduction = (rawValue, basicSalary) => resolveMasterDeduction(rawValue, basicSalary, basicSalary)
+const resolvePfDeduction = (rawValue, basicSalary) => {
+  if (normalizeYesNo(rawValue)) return roundMoney(Math.min(1800, (Number(basicSalary) || 0) * 0.12))
+  return 0
+}
 
 const calculateGovernmentSalary = ({ sourceBasicSalary, presentDays, totalDays, deductions, esiEnabled, targetFinalAmount }) => {
   const safeTotalDays = Math.max(1, Number(totalDays) || 0)
@@ -904,6 +942,18 @@ app.get('/api/salary-breakups', async (req, res) => {
               e.company,
               e.father_name AS "fatherName",
               e.department,
+              (
+                LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
+                OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
+              ) AS "pfEnabled",
+              (
+                LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
+                OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
+              ) AS "pfEnabled",
+              (
+                LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
+                OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
+              ) AS "pfEnabled",
               e.esi_value AS "esiValue",
               e.tds_value AS "tdsValue"
        FROM tbl_employee_monthly sb
@@ -1104,13 +1154,17 @@ app.get('/api/government-salaries', async (req, res) => {
               e.father_name AS "fatherName",
               e.company,
               e.department,
+              (
+                LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
+                OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
+              ) AS "pfEnabled",
               e.esi_value AS "esiValue",
               e.tds_value AS "tdsValue",
               COALESCE(g.source_present_days, f.present_days, 0) AS source_present_days,
               COALESCE(g.present_days, f.present_days, 0) AS present_days,
               COALESCE(g.total_days, 31) AS total_days,
               COALESCE(g.additional_absent_days, 0) AS additional_absent_days,
-              COALESCE(g.source_basic_salary, e.basic_package, NULLIF((e.import_data ->> 'basicPackage')::numeric, 0), 0) AS "sourceBasicSalary",
+              COALESCE(g.source_basic_salary, e.basic_package, 0) AS "sourceBasicSalary",
               COALESCE(g.final_salary, 0) AS final_salary,
               0 AS basic_salary,
               0 AS updated_basic_salary,
@@ -1123,33 +1177,34 @@ app.get('/api/government-salaries', async (req, res) => {
               0 AS incentive,
               0 AS total_earnings,
               CASE
-                WHEN NULLIF(regexp_replace(COALESCE(e.pf_value, ''), '[^0-9.-]', '', 'g'), '')::numeric < 100
-                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * NULLIF(regexp_replace(COALESCE(e.pf_value, ''), '[^0-9.-]', '', 'g'), '')::numeric / 100, 2)
-                ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.pf_value, ''), '[^0-9.-]', '', 'g'), '')::numeric, 0)
+                WHEN LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
+                  OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
+                  THEN ROUND(LEAST(1800, (COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * 0.12), 2)
+                ELSE 0
               END AS pf,
               CASE
-                WHEN NULLIF(regexp_replace(COALESCE(e.pfvol_value, ''), '[^0-9.-]', '', 'g'), '')::numeric < 100
-                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * NULLIF(regexp_replace(COALESCE(e.pfvol_value, ''), '[^0-9.-]', '', 'g'), '')::numeric / 100, 2)
-                ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.pfvol_value, ''), '[^0-9.-]', '', 'g'), '')::numeric, 0)
+                WHEN COALESCE(NULLIF(regexp_replace(COALESCE(e.pfvol_value::text, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric < 100
+                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * COALESCE(NULLIF(regexp_replace(COALESCE(e.pfvol_value::text, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric / 100, 2)
+                ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.pfvol_value::text, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric
               END AS pfvol,
               CASE
-                WHEN LOWER(TRIM(COALESCE(e.esi_value, ''))) IN ('yes', 'y', 'true', '1')
+                WHEN (COALESCE(e.basic_package, 0) * 0.65) <= 21000
                   THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * 0.0075, 2)
                 ELSE 0
               END AS esi,
               CASE
-                WHEN NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), '')::numeric < 100
-                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), '')::numeric / 100, 2)
-                ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), '')::numeric, 0)
+                WHEN COALESCE(NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric < 100
+                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * COALESCE(NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric / 100, 2)
+                ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.tds_value, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric
               END AS tds,
               COALESCE(adv.advance, 0) AS advance_amount,
               0 AS other_deduction,
               5 AS plwf,
               0 AS other_deductions,
               CASE
-                WHEN NULLIF(regexp_replace(COALESCE(e.prof_tax_value, ''), '[^0-9.-]', '', 'g'), '')::numeric < 100
-                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * NULLIF(regexp_replace(COALESCE(e.prof_tax_value, ''), '[^0-9.-]', '', 'g'), '')::numeric / 100, 2)
-                ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.prof_tax_value, ''), '[^0-9.-]', '', 'g'), '')::numeric, 0)
+                WHEN COALESCE(NULLIF(regexp_replace(COALESCE(e.prof_tax_value, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric < 100
+                  THEN ROUND((COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.65) * COALESCE(NULLIF(regexp_replace(COALESCE(e.prof_tax_value, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric / 100, 2)
+                ELSE COALESCE(NULLIF(regexp_replace(COALESCE(e.prof_tax_value, ''), '[^0-9.-]', '', 'g'), ''), '0')::numeric
               END AS professional_tax,
               0 AS total_deductions,
               COALESCE(f.final_amount, 0) AS net_amount,
@@ -1322,9 +1377,9 @@ app.post('/api/salary-breakups/finalize', async (req, res) => {
       const otAmount = roundMoney(mrate * (overtimeHours / (8 * totalDays)))
       const totalEarnings = roundMoney(daysAmount + otAmount)
       const derivedBasicSalary = roundMoney((basicSalary * (presentDays / totalDays)) * 0.65)
-      const pf = resolvePfDeduction(row.employee_pf_value, basicSalary)
+      const pf = resolvePfDeduction(row.employee_pf_value, derivedBasicSalary)
       const pfvol = resolveMasterDeduction(row.employee_pfvol_value, basicSalary)
-      const esi = normalizeYesNo(row.employee_esi_value)
+      const esi = (basicSalary * 0.65) <= 21000
         ? roundMoney(derivedBasicSalary * 0.0075)
         : 0
       const deductions = {
@@ -1346,7 +1401,7 @@ app.post('/api/salary-breakups/finalize', async (req, res) => {
         presentDays,
         totalDays,
         deductions,
-        esiEnabled: normalizeYesNo(row.employee_esi_value),
+        esiEnabled: (basicSalary * 0.65) <= 21000,
         targetFinalAmount: finalAmount,
       })
       return {
@@ -1509,6 +1564,13 @@ app.post('/api/hr/employees/import', async (req, res) => {
       return { raw: text, type: 'fixed', amount: parseNum(text) }
     }
 
+    const normalizeNumericDeductionRule = (value) => {
+      const text = String(value ?? '').trim()
+      const amount = parseNum(text)
+      if (!text || !Number.isFinite(amount)) return { raw: '', type: 'fixed', amount: 0 }
+      return { raw: text, type: text.endsWith('%') ? 'percentage' : 'fixed', amount }
+    }
+
     const filePeriod = parsePayrollPeriodFromFileName(sourceFileName)
     const currentMonth = new Date().getMonth() + 1
     const currentYear = new Date().getFullYear()
@@ -1528,11 +1590,10 @@ app.post('/api/hr/employees/import', async (req, res) => {
       const department = String(employee.department || '').trim()
       const company = String(employee.company || '').trim()
       const mrate = parseNum(employee.mrate ?? employee.mRate)
-      const basicPackage = parseNum(employee.basic ?? employee.basicSalary ?? employee.BASIC)
+      const basicPackage = parseNum(employee.basic ?? employee.grossSalary ?? employee.basicSalary ?? employee.BASIC ?? employee['Gross Salary'])
       const deductions = {
-        pf: normalizeDeductionRule(employee.pf),
-        pfvol: normalizeDeductionRule(employee.pfvol ?? employee.pfVol),
-        esi: normalizeDeductionRule(employee.esi),
+        pf: normalizeYesNo(employee.pf) ? { raw: 'Yes', type: 'percentage', amount: 12 } : { raw: 'No', type: 'fixed', amount: 0 },
+        pfvol: normalizeNumericDeductionRule(employee.pfvol ?? employee.pfVol),
         tds: normalizeDeductionRule(employee.tds),
         profTax: normalizeDeductionRule(employee.profTax ?? employee['PROF.TAX']),
       }
@@ -1540,10 +1601,10 @@ app.post('/api/hr/employees/import', async (req, res) => {
       const employeeResult = await client.query(
         `INSERT INTO tbl_employees (
           sno, emp_id, employee_name, father_name, department, is_active,
-          company, mrate, basic_package, pf_value, pfvol_value, esi_value, tds_value, prof_tax_value, import_data
+          company, mrate, basic_package, pf_value, pfvol_value, tds_value, prof_tax_value, import_data
         )
-         VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-         ON CONFLICT (emp_id)
+         VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (company, emp_id)
          DO UPDATE SET
            sno = EXCLUDED.sno,
            employee_name = EXCLUDED.employee_name,
@@ -1554,7 +1615,6 @@ app.post('/api/hr/employees/import', async (req, res) => {
            basic_package = EXCLUDED.basic_package,
            pf_value = EXCLUDED.pf_value,
            pfvol_value = EXCLUDED.pfvol_value,
-           esi_value = EXCLUDED.esi_value,
            tds_value = EXCLUDED.tds_value,
            prof_tax_value = EXCLUDED.prof_tax_value,
            import_data = EXCLUDED.import_data,
@@ -1571,8 +1631,7 @@ app.post('/api/hr/employees/import', async (req, res) => {
           mrate,
           basicPackage,
           deductions.pf.raw,
-          deductions.pfvol.raw,
-          deductions.esi.raw,
+          deductions.pfvol.amount,
           deductions.tds.raw,
           deductions.profTax.raw,
           JSON.stringify({
@@ -2091,11 +2150,3 @@ ensureSchema()
     console.error('schema initialization error', err)
     process.exit(1)
   })
-
-
-
-
-
-
-
-
