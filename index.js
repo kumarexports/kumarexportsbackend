@@ -946,14 +946,6 @@ app.get('/api/salary-breakups', async (req, res) => {
                 LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
                 OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
               ) AS "pfEnabled",
-              (
-                LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
-                OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
-              ) AS "pfEnabled",
-              (
-                LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
-                OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
-              ) AS "pfEnabled",
               e.esi_value AS "esiValue",
               e.tds_value AS "tdsValue"
        FROM tbl_employee_monthly sb
