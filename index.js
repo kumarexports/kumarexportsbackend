@@ -1298,39 +1298,11 @@ app.post('/api/salary-breakups/finalize', async (req, res) => {
          AND year = $2`,
       [monthNumber, yearNumber],
     )
-    const detailedCountResult = await client.query(
-      `SELECT COUNT(*)::int AS detailed_count
-       FROM tbl_employee_monthly
-       WHERE month = $1
-         AND year = $2
-         AND (present_days IS NOT NULL OR overtime_hours IS NOT NULL)
-         AND (present_days > 0 OR overtime_hours > 0)`,
-      [monthNumber, yearNumber],
-    )
-    const attendanceCount = Number(detailedCountResult.rows[0]?.detailed_count || 0)
+    const attendanceCount = Number(attendanceCountResult.rows[0]?.attendance_count || 0)
     if (!attendanceCount) {
       return res.status(400).json({
         ok: false,
         error: 'Please upload the Attendance file first.',
-      })
-    }
-
-    const salaryBreakupCoverage = await client.query(
-      `SELECT
-         (SELECT COUNT(*)::int FROM tbl_employees WHERE is_active = TRUE) AS active_employee_count,
-         (SELECT COUNT(*)::int
-          FROM tbl_employee_monthly sb
-          JOIN tbl_employees e ON e.id = sb.employee_id
-          WHERE sb.month = $1 AND sb.year = $2 AND e.is_active = TRUE) AS salary_breakup_count`,
-      [monthNumber, yearNumber],
-    )
-    const coverage = salaryBreakupCoverage.rows[0]
-    if (Number(coverage.salary_breakup_count) !== Number(coverage.active_employee_count)) {
-      return res.status(400).json({
-        ok: false,
-        error: `Upload/import Salary Breakups for ${getMonthLabel(monthNumber, yearNumber)} first.`,
-        activeEmployeeCount: Number(coverage.active_employee_count),
-        salaryBreakupCount: Number(coverage.salary_breakup_count),
       })
     }
 
