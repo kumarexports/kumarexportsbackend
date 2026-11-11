@@ -406,7 +406,7 @@ const resolveMasterDeduction = (rawValue, basicSalary, percentageBase = basicSal
 }
 
 const resolvePfDeduction = (rawValue, basicSalary) => {
-  if (normalizeYesNo(rawValue)) return roundMoney(Math.min(1800, (Number(basicSalary) || 0) * 0.12))
+  if (normalizeYesNo(rawValue)) return roundMoney(Math.min(3000, (Number(basicSalary) || 0) * 0.12))
   return 0
 }
 
@@ -1171,7 +1171,7 @@ app.get('/api/government-salaries', async (req, res) => {
               CASE
                 WHEN LOWER(TRIM(COALESCE(e.pf_value, ''))) IN ('yes', 'y', 'true', '1')
                   OR LOWER(TRIM(COALESCE(e.import_data #>> '{deductions,pf,raw}', ''))) IN ('yes', 'y', 'true', '1')
-                  THEN ROUND(LEAST(1800, (COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.70) * 0.12), 2)
+                  THEN ROUND(LEAST(3000, (COALESCE(g.source_basic_salary, e.basic_package, 0) * COALESCE(g.present_days, f.present_days, 0) / GREATEST(COALESCE(g.total_days, 31), 1) * 0.70) * 0.12), 2)
                 ELSE 0
               END AS pf,
               CASE
