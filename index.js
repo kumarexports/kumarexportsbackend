@@ -1033,15 +1033,25 @@ app.post('/api/advances/import', async (req, res) => {
     let skippedCount = 0
     for (const row of rows) {
       const empId = String(row.empId || row.EmpID || '').trim()
+      const company = String(row.company || row.Company || '').trim()
       const advanceAmount = Number(row.advance ?? row.Advance ?? 0)
       if (!empId || !Number.isFinite(advanceAmount) || advanceAmount < 0) {
         skippedCount += 1
         continue
       }
-      const employeeResult = await client.query(
-        `SELECT id FROM tbl_employees WHERE emp_id = $1 LIMIT 1`,
-        [empId],
-      )
+      const employeeResult = company
+        ? await client.query(
+          `SELECT id FROM tbl_employees WHERE emp_id = $1 AND LOWER(TRIM(company)) = LOWER(TRIM($2)) LIMIT 1`,
+          [empId, company],
+        )
+        : await client.query(
+          `SELECT id FROM tbl_employees WHERE emp_id = $1 LIMIT 2`,
+          [empId],
+        )
+      if (!company && employeeResult.rows.length !== 1) {
+        skippedCount += 1
+        continue
+      }
       const employeeId = employeeResult.rows[0]?.id
       if (!employeeId) {
         skippedCount += 1
@@ -2036,11 +2046,14 @@ app.post('/api/hr/attendance/import-monthly', async (req, res) => {
     }
 
     const employeesResult = await client.query(
-      `SELECT id, emp_id
+      `SELECT id, emp_id, company
        FROM tbl_employees
        WHERE is_active = TRUE`,
     )
-    const employeeMap = new Map(employeesResult.rows.map((employee) => [String(employee.emp_id).trim(), Number(employee.id)]))
+    const employeeMap = new Map(employeesResult.rows.map((employee) => [
+      `${String(employee.company || '').trim().toLowerCase()}::${String(employee.emp_id).trim()}`,
+      Number(employee.id),
+    ]))
 
     await client.query('BEGIN')
     let savedCount = 0
@@ -2048,7 +2061,8 @@ app.post('/api/hr/attendance/import-monthly', async (req, res) => {
 
     for (const row of rows) {
       const empId = String(row.empId ?? row['EmpId'] ?? row['Emp ID'] ?? '').trim()
-      const employeeId = employeeMap.get(empId)
+      const company = String(row.company ?? row.Company ?? '').trim()
+      const employeeId = employeeMap.get(`${company.toLowerCase()}::${empId}`)
       if (!employeeId) {
         skippedCount += 1
         continue
