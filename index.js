@@ -1097,6 +1097,7 @@ app.get('/api/advances', async (req, res) => {
               e.emp_id AS "empId",
               e.employee_name AS "employeeName",
               e.father_name AS "fatherName",
+              e.company,
               e.department,
               COALESCE(a.advance, 0) AS advance
        FROM tbl_advances a
